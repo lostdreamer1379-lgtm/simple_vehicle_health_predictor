@@ -99,27 +99,39 @@ flowchart TD
 ### Inference data flow
 
 ```mermaid
-sequenceDiagram
-    participant U as User
-    participant S as local_inference.py
-    participant A as Pickle artifacts
-    participant D as Verification CSV
-    participant O as Output reports
+flowchart TD
+    START([Run<br/>python local_inference.py]) --> LOAD
 
-    U->>S: python local_inference.py
-    S->>A: Load model, scaler, feature names, metadata
-    S->>D: Read verification_dataset.csv
-    S->>S: Validate required columns
-    S->>S: Fill missing feature values with column means
-    S->>A: Transform features with saved scaler
-    S->>A: predict() and predict_proba()
-    S->>O: Write verification_predictions.csv
-    S->>O: Write high_risk_vehicles.csv
-    alt Failure column exists
-        S->>S: Calculate metrics and plots
-        S->>O: Write verification_results.png
+    subgraph INPUTS[Inputs]
+        DATA[verification_dataset.csv<br/>Sensor rows with optional Failure labels]
+        ARTIFACTS[Saved artifacts<br/>model + scaler + feature order + metadata]
     end
+
+    LOAD[Load inputs] --> CHECK
+    DATA --> LOAD
+    ARTIFACTS --> LOAD
+
+    CHECK[Validate required feature columns] -->|Valid| PREP
+    CHECK -->|Missing columns| ERROR[Stop and report<br/>missing features]
+
+    PREP[Select the nine features<br/>in persisted order] --> MISSING
+    MISSING[Fill missing feature values<br/>with column means] --> SCALE
+    SCALE[Apply the saved StandardScaler<br/>transform only; never fit again] --> PREDICT
+
+    PREDICT[Generate predictions<br/>predict() + predict_proba()] --> ENRICH
+    ENRICH[Append Predicted_Failure<br/>Failure_Probability + Risk_Level] --> SAVE_ALL
+
+    SAVE_ALL[Save verification_predictions.csv] --> HIGH_RISK
+    HIGH_RISK[Filter probability > 0.50] --> SAVE_RISK[Save high_risk_vehicles.csv]
+    SAVE_ALL --> LABEL_CHECK{Failure column<br/>present?}
+    LABEL_CHECK -->|No| DONE([Inference complete])
+    LABEL_CHECK -->|Yes| EVALUATE[Calculate accuracy, precision,<br/>recall, F1, ROC-AUC,<br/>classification report, and confusion matrix]
+    EVALUATE --> PLOT[Generate evaluation plots]
+    PLOT --> SAVE_PLOT[Save verification_results.png]
+    SAVE_PLOT --> DONE
 ```
+
+The main path always produces predictions and a high-risk report. The evaluation branch is conditional: it runs only when the input CSV includes the ground-truth `Failure` column.
 
 ## Repository layout
 
