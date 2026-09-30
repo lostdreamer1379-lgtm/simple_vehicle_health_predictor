@@ -100,34 +100,34 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    START([Run<br/>python local_inference.py]) --> LOAD
+    START(["Run<br/>python local_inference.py"]) --> LOAD
 
-    subgraph INPUTS[Inputs]
-        DATA[verification_dataset.csv<br/>Sensor rows with optional Failure labels]
-        ARTIFACTS[Saved artifacts<br/>model + scaler + feature order + metadata]
+    subgraph INPUTS["Inputs"]
+        DATA["verification_dataset.csv<br/>Sensor rows with optional Failure labels"]
+        ARTIFACTS["Saved artifacts<br/>model + scaler + feature order + metadata"]
     end
 
-    LOAD[Load inputs] --> CHECK
+    LOAD["Load inputs"] --> CHECK
     DATA --> LOAD
     ARTIFACTS --> LOAD
 
-    CHECK[Validate required feature columns] -->|Valid| PREP
-    CHECK -->|Missing columns| ERROR[Stop and report<br/>missing features]
+    CHECK["Validate required feature columns"] -->|Valid| PREP
+    CHECK -->|Missing columns| ERROR["Stop and report<br/>missing features"]
 
-    PREP[Select the nine features<br/>in persisted order] --> MISSING
-    MISSING[Fill missing feature values<br/>with column means] --> SCALE
-    SCALE[Apply the saved StandardScaler<br/>transform only; never fit again] --> PREDICT
+    PREP["Select the nine features<br/>in persisted order"] --> MISSING
+    MISSING["Fill missing feature values<br/>with column means"] --> SCALE
+    SCALE["Apply the saved StandardScaler<br/>transform only; never fit again"] --> PREDICT
 
-    PREDICT[Generate predictions<br/>predict() + predict_proba()] --> ENRICH
-    ENRICH[Append Predicted_Failure<br/>Failure_Probability + Risk_Level] --> SAVE_ALL
+    PREDICT["Generate predictions<br/>predict and predict_proba"] --> ENRICH
+    ENRICH["Append Predicted_Failure<br/>Failure_Probability + Risk_Level"] --> SAVE_ALL
 
-    SAVE_ALL[Save verification_predictions.csv] --> HIGH_RISK
-    HIGH_RISK[Filter probability > 0.50] --> SAVE_RISK[Save high_risk_vehicles.csv]
-    SAVE_ALL --> LABEL_CHECK{Failure column<br/>present?}
-    LABEL_CHECK -->|No| DONE([Inference complete])
-    LABEL_CHECK -->|Yes| EVALUATE[Calculate accuracy, precision,<br/>recall, F1, ROC-AUC,<br/>classification report, and confusion matrix]
-    EVALUATE --> PLOT[Generate evaluation plots]
-    PLOT --> SAVE_PLOT[Save verification_results.png]
+    SAVE_ALL["Save verification_predictions.csv"] --> HIGH_RISK
+    HIGH_RISK["Filter probability > 0.50"] --> SAVE_RISK["Save high_risk_vehicles.csv"]
+    SAVE_ALL --> LABEL_CHECK{"Failure column<br/>present?"}
+    LABEL_CHECK -->|No| DONE(["Inference complete"])
+    LABEL_CHECK -->|Yes| EVALUATE["Calculate accuracy, precision,<br/>recall, F1, ROC-AUC,<br/>classification report, and confusion matrix"]
+    EVALUATE --> PLOT["Generate evaluation plots"]
+    PLOT --> SAVE_PLOT["Save verification_results.png"]
     SAVE_PLOT --> DONE
 ```
 
