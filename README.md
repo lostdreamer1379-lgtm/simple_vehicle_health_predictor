@@ -1,489 +1,439 @@
-# Vehicle Health Monitoring - Predictive Maintenance ML System
+# Vehicle Health Monitoring
 
-A complete machine learning pipeline for predicting vehicle failures using sensor data. Train in Google Colab (cloud) and verify locally on new data.
+An educational predictive-maintenance pipeline that classifies whether a vehicle record indicates a likely failure. The project trains several scikit-learn classifiers in Google Colab, exports the selected model and preprocessing artifacts, and then runs local batch inference against a verification CSV.
 
-## 📊 Dataset Overview
-- **Records**: 6,000 vehicle maintenance records
-- **Features**: 9 vehicle sensor measurements
-- **Target**: Binary classification (0=No Failure, 1=Failure)
-- **Failure Rate**: ~20% (imbalanced dataset)
+> **Important:** This repository is a demonstration and validation workflow, not a safety-critical diagnostic system. The checked-in model currently has limited predictive performance: cross-validation ROC-AUC is **0.5461** and held-out test ROC-AUC is **0.5696**. Treat predictions as experimental signals that require domain review.
 
-### Features
-1. Engine_Temperature_C - Engine coolant temperature (°C)
-2. RPM - Engine rotations per minute
-3. Oil_Pressure_psi - Oil pressure (psi)
-4. Vibration_mm_s - Vibration frequency (mm/s)
-5. Battery_Voltage_V - Battery voltage (V)
-6. Coolant_Temperature_C - Coolant system temperature (°C)
-7. Fuel_Consumption_L_100km - Fuel consumption rate
-8. Vehicle_Speed_kmh - Current vehicle speed (km/h)
-9. Operating_Hours - Total engine operating hours
+## Contents
 
----
+- [What the project does](#what-the-project-does)
+- [Architecture](#architecture)
+- [Repository layout](#repository-layout)
+- [Dataset and feature contract](#dataset-and-feature-contract)
+- [Current model results](#current-model-results)
+- [Quick start](#quick-start)
+- [Training workflow](#training-workflow)
+- [Local inference workflow](#local-inference-workflow)
+- [Output files](#output-files)
+- [Risk levels and decision thresholds](#risk-levels-and-decision-thresholds)
+- [Implementation details](#implementation-details)
+- [Reproducibility and compatibility](#reproducibility-and-compatibility)
+- [Limitations and recommended improvements](#limitations-and-recommended-improvements)
+- [Troubleshooting](#troubleshooting)
 
-## 🚀 Quick Start
+## What the project does
 
-### Option A: Complete Automated Flow
-1. Run training in Colab: `vehicle_health_colab.py`
-2. Download 4 pickle files
-3. Run local verification: `local_inference.py`
-4. Review results and high-risk reports
+The pipeline maps nine numerical vehicle signals to:
 
-### Option B: Step-by-Step
-See `COLAB_SETUP_GUIDE.md` for detailed instructions
+1. A binary failure prediction (`0` = no failure, `1` = failure).
+2. A failure probability from `predict_proba`.
+3. A rule-based risk label (`Low`, `Medium`, `High`, or `Critical`).
+4. Optional evaluation metrics when the input CSV includes the known `Failure` label.
+5. A CSV report of vehicles above the high-risk threshold.
 
----
+The repository has two execution modes:
 
-## 📁 Project Files
+- **Training:** Run `vehicle_health_colab.py` in Google Colab or another Python environment containing the required packages. It reads `dataset.csv`, compares three models, and writes serialized artifacts.
+- **Inference:** Run `local_inference.py` locally with the exported artifacts and `verification_dataset.csv`. It produces predictions and, when labels are present, evaluation plots and metrics.
 
-```
-├── vehicle_health_colab.py          # Main training script (run in Colab)
-├── local_inference.py               # Local verification script
-├── COLAB_SETUP_GUIDE.md            # Step-by-step Colab guide
-├── QUICK_COLAB_NOTEBOOK.txt        # Copy-paste Colab cells
-├── README.md                        # This file
-└── dataset.csv                      # Your input dataset
-```
+## Architecture
 
----
+### End-to-end system
 
-## ⚙️ PART 1: CLOUD TRAINING (COLAB)
+```mermaid
+flowchart LR
+    A[dataset.csv<br/>6,000 labeled records] --> B[vehicle_health_colab.py]
+    B --> C[Explore and validate data]
+    C --> D[80/20 stratified split]
+    D --> E[Fit StandardScaler on training data]
+    E --> F[5-fold stratified CV]
+    F --> G[Train Logistic Regression<br/>Random Forest<br/>Gradient Boosting]
+    G --> H[Select highest mean CV ROC-AUC]
+    H --> I[Export model artifacts]
 
-### Step 1: Prepare Google Colab
-```
-1. Go to: https://colab.research.google.com/
-2. Click "New notebook"
-3. Copy entire content from vehicle_health_colab.py
-4. Or use cells from QUICK_COLAB_NOTEBOOK.txt
-```
+    I --> J[best_vehicle_health_model.pkl]
+    I --> K[feature_scaler.pkl]
+    I --> L[feature_names.pkl]
+    I --> M[model_metadata.pkl]
+    I --> N[model_results_summary.csv]
+    I --> O[model_evaluation_results.png]
 
-### Step 2: Run Training
-The script performs:
-- ✅ Data loading and exploration
-- ✅ 80-20 train-test split with stratification
-- ✅ Feature scaling (StandardScaler)
-- ✅ 5-fold stratified cross-validation
-- ✅ Training 3 models:
-  - Logistic Regression
-  - Random Forest (100 trees)
-  - Gradient Boosting (100 trees)
-- ✅ Model evaluation and comparison
-- ✅ Best model selection by CV ROC-AUC
-- ✅ Artifact saving
-
-### Step 3: Download Artifacts
-After training completes, download:
-```
-1. best_vehicle_health_model.pkl    ← Trained model
-2. feature_scaler.pkl               ← Feature normalizer
-3. feature_names.pkl                ← Feature ordering
-4. model_metadata.pkl               ← Performance metrics
-5. model_results_summary.csv        ← Summary table
-6. model_evaluation_results.png     ← Visualizations
+    P[verification_dataset.csv<br/>labeled or unlabeled] --> Q[local_inference.py]
+    J --> Q
+    K --> Q
+    L --> Q
+    M --> Q
+    Q --> R[Select feature columns]
+    R --> S[Fill missing feature values<br/>with column means]
+    S --> T[Apply saved scaler]
+    T --> U[Generate class and probability]
+    U --> V[verification_predictions.csv]
+    U --> W[high_risk_vehicles.csv]
+    U --> X{Failure column present?}
+    X -->|Yes| Y[Metrics, ROC curve,<br/>confusion matrix]
+    Y --> Z[verification_results.png]
 ```
 
----
+### Training data flow
 
-## 💻 PART 2: LOCAL VERIFICATION
-
-### Prerequisites
-```bash
-pip install pandas numpy scikit-learn matplotlib seaborn
-python -m pip install pandas numpy scikit-learn matplotlib seaborn
-
+```mermaid
+flowchart TD
+    A[CSV input] --> B[Drop Record_ID and Failure from X]
+    A --> C[Failure becomes target y]
+    B --> D[train_test_split<br/>test_size=0.20<br/>stratify=y<br/>random_state=42]
+    C --> D
+    D --> E[X_train, y_train]
+    D --> F[X_test, y_test]
+    E --> G[StandardScaler.fit_transform]
+    F --> H[StandardScaler.transform]
+    G --> I[5-fold StratifiedKFold<br/>scoring=roc_auc]
+    I --> J[Compare 3 classifiers]
+    G --> K[Fit each classifier on all scaled training data]
+    H --> L[Evaluate on held-out test data]
+    J --> M[Choose best by mean CV ROC-AUC]
+    K --> M
+    L --> M
+    M --> N[Persist selected model,<br/>scaler, feature order, metadata]
 ```
 
-### Setup
-Create folder structure:
-```
-vehicle-health/
-├── best_vehicle_health_model.pkl
-├── feature_scaler.pkl
-├── feature_names.pkl
-├── model_metadata.pkl
-├── local_inference.py
-└── verification_dataset.csv  ← Your test data
+### Inference data flow
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant S as local_inference.py
+    participant A as Pickle artifacts
+    participant D as Verification CSV
+    participant O as Output reports
+
+    U->>S: python local_inference.py
+    S->>A: Load model, scaler, feature names, metadata
+    S->>D: Read verification_dataset.csv
+    S->>S: Validate required columns
+    S->>S: Fill missing feature values with column means
+    S->>A: Transform features with saved scaler
+    S->>A: predict() and predict_proba()
+    S->>O: Write verification_predictions.csv
+    S->>O: Write high_risk_vehicles.csv
+    alt Failure column exists
+        S->>S: Calculate metrics and plots
+        S->>O: Write verification_results.png
+    end
 ```
 
-### Prepare Verification Data
-Your CSV should have these 9 columns:
+## Repository layout
+
+```text
+.
+├── dataset.csv                    # Labeled training data: 6,000 rows
+├── verification_dataset.csv       # Labeled example verification data: 25 rows
+├── vehicle_health_colab.py        # Training, comparison, export, and plots
+├── local_inference.py             # Batch inference and optional evaluation
+├── best_vehicle_health_model.pkl  # Exported selected classifier
+├── feature_scaler.pkl             # Fitted sklearn StandardScaler
+├── feature_names.pkl              # Ordered list of nine model features
+├── model_metadata.pkl             # Model name and saved metrics
+├── model_results_summary.csv      # One-row summary of selected model results
+├── results/
+│   ├── PROJECT_SUMMARY.md         # Earlier project summary
+│   └── model_evaluation_results.png
+└── README.md
+```
+
+The README references only files present in this repository. Older project notes mention files such as `COLAB_SETUP_GUIDE.md`, `QUICK_COLAB_NOTEBOOK.txt`, and `VERIFICATION_DATA_TEMPLATE.csv`; those files are not currently checked in.
+
+## Dataset and feature contract
+
+### Training dataset
+
+`dataset.csv` contains **6,000 rows and 11 columns**:
+
+- `Record_ID`: identifier; excluded from model training.
+- Nine numerical sensor/operating features: used as model input.
+- `Failure`: binary target; excluded from model input.
+
+Observed training data quality:
+
+| Property | Value |
+|---|---:|
+| Rows | 6,000 |
+| Columns | 11 |
+| Failure = 0 | 4,702 |
+| Failure = 1 | 1,298 |
+| Failure rate | 21.63% |
+| Missing values | 0 |
+| Duplicate rows | 0 |
+
+### Required model features
+
+The order is persisted in `feature_names.pkl` and must be preserved when preparing new data.
+
+| Feature | Unit / meaning |
+|---|---|
+| `Engine_Temperature_C` | Engine temperature in degrees Celsius |
+| `RPM` | Engine revolutions per minute |
+| `Oil_Pressure_psi` | Oil pressure in psi |
+| `Vibration_mm_s` | Vibration level in mm/s |
+| `Battery_Voltage_V` | Battery voltage in volts |
+| `Coolant_Temperature_C` | Coolant temperature in degrees Celsius |
+| `Fuel_Consumption_L_100km` | Fuel consumption in litres per 100 km |
+| `Vehicle_Speed_kmh` | Vehicle speed in km/h |
+| `Operating_Hours` | Total operating hours |
+
+### Verification CSV format
+
+The minimum unlabeled format is:
+
 ```csv
-Record_ID, Engine_Temperature_C, RPM, Oil_Pressure_psi, Vibration_mm_s, 
-Battery_Voltage_V, Coolant_Temperature_C, Fuel_Consumption_L_100km, 
-Vehicle_Speed_kmh, Operating_Hours, [Failure]
+Record_ID,Engine_Temperature_C,RPM,Oil_Pressure_psi,Vibration_mm_s,Battery_Voltage_V,Coolant_Temperature_C,Fuel_Consumption_L_100km,Vehicle_Speed_kmh,Operating_Hours
+1001,92.5,1450,55.2,2.3,13.1,88.0,9.5,45.0,2500.0
 ```
 
-Optional: Include `Failure` column (0/1) for accuracy evaluation.
+Adding `Failure` enables accuracy, precision, recall, F1, ROC-AUC, a classification report, a confusion matrix, and plots:
 
-### Run Inference
+```csv
+Record_ID,Engine_Temperature_C,RPM,Oil_Pressure_psi,Vibration_mm_s,Battery_Voltage_V,Coolant_Temperature_C,Fuel_Consumption_L_100km,Vehicle_Speed_kmh,Operating_Hours,Failure
+1001,92.5,1450,55.2,2.3,13.1,88.0,9.5,45.0,2500.0,0
+```
+
+The checked-in `verification_dataset.csv` contains 25 labeled examples: 16 non-failures and 9 failures. It is a small demonstration set, not an independent production validation set.
+
+## Current model results
+
+The checked-in metadata and `model_results_summary.csv` report the following results:
+
+| Model selected | CV ROC-AUC mean | CV standard deviation | Test accuracy | Test ROC-AUC | Test F1 | Test precision | Test recall |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Gradient Boosting | 0.5461 | 0.0216 | 0.7792 | 0.5696 | 0.0767 | 0.4074 | 0.0423 |
+
+The selected model is **Gradient Boosting** because the training script chooses the highest mean five-fold CV ROC-AUC. This selection rule does not mean the model is production-ready. In particular, the recorded recall of **0.0423** means that the exported classifier detected only a small fraction of positive failures at its default classification threshold on the held-out test set.
+
+The checked-in `results/model_evaluation_results.png` contains the training script's model comparison, ROC curves, confusion matrix, and selected-model test metrics.
+
+## Quick start
+
+### 1. Create an environment
+
+Python 3.10 or 3.11 is recommended for compatibility with the serialized scikit-learn artifacts. Install the packages used by the scripts:
+
+```bash
+python -m venv .venv
+
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
+
+# macOS/Linux
+# source .venv/bin/activate
+
+python -m pip install --upgrade pip
+python -m pip install pandas numpy scikit-learn matplotlib seaborn
+```
+
+### 2. Run local inference with the checked-in artifacts
+
+Run from the repository root because `local_inference.py` uses relative file names:
+
 ```bash
 python local_inference.py
 ```
 
-### Output Files
-```
-verification_predictions.csv      # All samples + predictions + probabilities
-verification_results.png          # Performance plots (if labels provided)
-high_risk_vehicles.csv           # Vehicles needing maintenance
-```
+The script reads:
 
----
+- `best_vehicle_health_model.pkl`
+- `feature_scaler.pkl`
+- `feature_names.pkl`
+- `model_metadata.pkl` (optional for execution, used for comparison output)
+- `verification_dataset.csv`
 
-## 📈 Understanding Results
+It writes output files to the current working directory. Existing output files with the same names are overwritten.
 
-### Cross-Validation Metrics
-```
-Mean CV ROC-AUC: 0.87 ± 0.02
-├─ Mean: 0.87 (average model performance across folds)
-└─ Std Dev: ±0.02 (consistency - lower is better)
-```
+### 3. Train or retrain the model
 
-### Performance Metrics
+For cloud training:
 
-| Metric | Formula | Interpretation |
-|--------|---------|-----------------|
-| **Accuracy** | (TP+TN)/(TP+TN+FP+FN) | % correct predictions |
-| **Precision** | TP/(TP+FP) | % predicted failures that are real |
-| **Recall** | TP/(TP+FN) | % actual failures detected |
-| **F1-Score** | 2×(Precision×Recall)/(Precision+Recall) | Balance of precision & recall |
-| **ROC-AUC** | Area under ROC curve | 0.5=random, 1.0=perfect |
+1. Open [Google Colab](https://colab.research.google.com/).
+2. Upload `dataset.csv` and `vehicle_health_colab.py`.
+3. Run the script from the directory containing `dataset.csv`.
+4. Download the generated artifacts listed in [Output files](#output-files).
+5. Place the artifacts beside `local_inference.py` for local verification.
 
-### Risk Classification
-```
-Probability > 70%  → CRITICAL (immediate action)
-Probability > 50%  → HIGH (schedule maintenance)
-Probability > 30%  → MEDIUM (monitor)
-Probability ≤ 30%  → LOW (normal operation)
+The training script can also be run locally after installing the dependencies:
+
+```bash
+python vehicle_health_colab.py
 ```
 
-### Confusion Matrix Interpretation
-```
-           Predicted
-           No Fail | Fail
-Actual  ┌─────────┬──────┐
-No Fail │   TN    │  FP  │ ← False Positives (unnecessary maintenance)
-        ├─────────┼──────┤
-Fail    │   FN    │  TP  │ ← False Negatives (MISSED FAILURES!)
-        └─────────┴──────┘
-```
+The script uses plotting calls that may open an interactive window. In a headless environment, use a non-interactive Matplotlib backend if required by your environment.
 
-**Goal**: High TP, High TN, Low FP, **Low FN** (don't miss failures!)
+## Training workflow
 
----
+`vehicle_health_colab.py` performs these steps:
 
-## 🎯 HOW TO GET BEST RESULTS
+1. Loads `dataset.csv`.
+2. Prints shape, sample rows, schema, summary statistics, target distribution, missing-value count, and duplicate count.
+3. Drops `Record_ID` and separates `Failure` into `X` and `y`.
+4. Creates an 80/20 stratified train/test split with `random_state=42`.
+5. Fits `StandardScaler` on `X_train` only and transforms both train and test data.
+6. Creates a shuffled five-fold `StratifiedKFold` with `random_state=42`.
+7. Compares:
+   - `LogisticRegression(max_iter=1000, random_state=42)`
+   - `RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)`
+   - `GradientBoostingClassifier(n_estimators=100, random_state=42)`
+8. Scores each model with cross-validation ROC-AUC.
+9. Fits each model on all scaled training data and calculates train/test metrics.
+10. Selects the model with the highest mean CV ROC-AUC.
+11. Exports the selected model, preprocessing artifacts, metrics, and plots.
 
-### 1. Cross-Validation Strategy
-Why 5-fold stratified CV?
-- Uses all data for training AND validation
-- Prevents overfitting bias in single train-test split
-- Maintains class balance in each fold
-- More reliable performance estimation
-- Reduces variance in metrics
+### Important preprocessing detail
 
-### 2. Feature Scaling
-StandardScaler is crucial:
-- Normalizes all features to mean=0, std=1
-- Prevents large-scale features from dominating
-- Required for consistent model behavior
-- **SAME scaler used on training AND test data**
+The scaler is fitted only on training rows:
 
-### 3. Model Selection
-Three models trained to find best:
-- **Logistic Regression**: Baseline, interpretable
-- **Random Forest**: Non-linear, handles interactions
-- **Gradient Boosting**: Often best performance, slower
-
-Best model selected by **highest CV ROC-AUC score**
-
-### 4. Verification Best Practices
-✅ Use data NOT in training set  
-✅ Same feature format and order  
-✅ Same feature scaling (use saved scaler)  
-✅ Monitor metrics over time  
-✅ Track false negatives (missed failures)  
-
-### 5. Handling Class Imbalance
-Dataset has ~20% failures (imbalanced):
-- Stratified split maintains ratio in train/test
-- Stratified CV maintains ratio in each fold
-- ROC-AUC used instead of Accuracy
-- ROC-AUC works well with imbalanced data
-
----
-
-## 🔍 Interpreting Predictions
-
-### Example Prediction
 ```python
-Record: 1001
-Engine_Temperature_C: 105.2
-RPM: 2100
-Oil_Pressure_psi: 48.5
-Vibration_mm_s: 3.8
-Battery_Voltage_V: 12.8
-Coolant_Temperature_C: 98.0
-Fuel_Consumption_L_100km: 11.2
-Vehicle_Speed_kmh: 60.0
-Operating_Hours: 7800.0
-
-PREDICTION:
-├─ Predicted Failure: YES (1)
-├─ Failure Probability: 0.72 (72%)
-├─ Risk Level: CRITICAL
-└─ Action: Schedule immediate maintenance
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
 ```
 
-### Why This Prediction?
-- High engine temperature (105.2°C)
-- High vibration (3.8 mm/s)
-- High RPM (2100)
-- High fuel consumption (11.2)
-- Low oil pressure (48.5 psi)
-- High operating hours (7800h)
-= **Strong indicators of imminent failure**
+New inference data must use `scaler.transform(...)`; fitting a new scaler would change the feature representation expected by the model.
 
----
+## Local inference workflow
 
-## 🛠️ Troubleshooting
+`local_inference.py`:
 
-### Problem: Model performance drops on verification data
-**Solution**:
-1. Check feature consistency (same order, same names)
-2. Verify scaler is applied correctly
-3. Check data distributions (different from training?)
-4. Consider ensemble (average multiple models)
+1. Loads the model, scaler, feature order, and metadata with `pickle`.
+2. Reads `verification_dataset.csv`.
+3. Checks whether `Failure` is present.
+4. Selects columns using the persisted feature order.
+5. Fills missing feature values with the corresponding verification-column mean.
+6. Applies the saved scaler.
+7. Calls `predict()` and `predict_proba()[:, 1]`.
+8. Adds:
+   - `Predicted_Failure`
+   - `Failure_Probability`
+   - `Risk_Level`
+9. Saves all predictions.
+10. If labels exist, calculates evaluation metrics and writes visualizations.
+11. Filters rows with probability greater than `0.5` into the high-risk report.
 
-### Problem: Too many false positives
-**Increase threshold**:
+### Example programmatic loading
+
 ```python
-# In local_inference.py
-y_pred = (y_pred_proba > 0.6).astype(int)  # Instead of default 0.5
+import pickle
+import pandas as pd
+
+with open("best_vehicle_health_model.pkl", "rb") as file:
+    model = pickle.load(file)
+
+with open("feature_scaler.pkl", "rb") as file:
+    scaler = pickle.load(file)
+
+with open("feature_names.pkl", "rb") as file:
+    feature_names = pickle.load(file)
+
+df = pd.read_csv("verification_dataset.csv")
+X = scaler.transform(df[feature_names])
+failure_probability = model.predict_proba(X)[:, 1]
 ```
 
-### Problem: Missing failures (high false negatives)
-**Decrease threshold**:
-```python
-# In local_inference.py
-y_pred = (y_pred_proba > 0.4).astype(int)  # Lower threshold
+## Output files
+
+| File | Produced by | Description |
+|---|---|---|
+| `best_vehicle_health_model.pkl` | Training | Selected fitted classifier |
+| `feature_scaler.pkl` | Training | `StandardScaler` fitted on training features |
+| `feature_names.pkl` | Training | Ordered list of model input columns |
+| `model_metadata.pkl` | Training | Model name, feature names, CV metrics, and test metrics |
+| `model_results_summary.csv` | Training | One-row summary for the selected model |
+| `model_evaluation_results.png` | Training | Training/test comparison plots |
+| `verification_predictions.csv` | Inference | Original verification rows plus predictions and risk |
+| `verification_results.png` | Inference with labels | ROC curve, confusion matrix, probability distribution, and metrics |
+| `high_risk_vehicles.csv` | Inference | Rows with failure probability greater than 0.5 |
+
+## Risk levels and decision thresholds
+
+Risk labels are assigned from the predicted failure probability:
+
+| Probability | Label |
+|---:|---|
+| `> 0.70` | Critical |
+| `> 0.50` | High |
+| `> 0.30` | Medium |
+| `<= 0.30` | Low |
+
+The classifier's binary `predict()` output is separate from these labels. The high-risk report uses `Failure_Probability > 0.5`, while `predict()` uses the estimator's own default decision threshold.
+
+These cutoffs are illustrative and have not been calibrated against maintenance costs, downtime, or safety requirements. A real deployment should choose thresholds using validation data and an explicit false-negative/false-positive cost trade-off.
+
+## Implementation details
+
+### Evaluation metrics
+
+- **Accuracy:** fraction of all predictions that are correct.
+- **Precision:** fraction of predicted failures that are actual failures.
+- **Recall:** fraction of actual failures detected.
+- **F1:** harmonic mean of precision and recall.
+- **ROC-AUC:** ranking quality across probability thresholds; `0.5` is approximately random ranking.
+
+For this imbalanced target, ROC-AUC and recall are more informative than accuracy alone. The current low recall is a material limitation.
+
+### Missing data behavior
+
+Training reports missing values but does not impute them before fitting. Inference fills missing values with the mean of each verification input column. This is a simple fallback and is not guaranteed to match a robust production data-quality policy.
+
+### Artifact security
+
+The artifacts use Python pickle. Never load pickle files from an untrusted source: unpickling can execute arbitrary Python code. For deployment, store artifacts in a trusted location and consider a safer, versioned model-serialization strategy.
+
+## Reproducibility and compatibility
+
+- The split and cross-validation use `random_state=42`.
+- Model selection is based on mean five-fold CV ROC-AUC.
+- The saved model expects the nine feature columns in `feature_names.pkl`.
+- Serialized scikit-learn and NumPy artifacts are version-sensitive. Use a compatible Python, NumPy, and scikit-learn environment when loading the checked-in `.pkl` files.
+- Retraining is preferred when dependencies have changed materially or when the input schema changes.
+- The scripts use relative paths; run them from the repository root or update the constants at the top of the script.
+
+## Limitations and recommended improvements
+
+The current project should be improved before any operational use:
+
+1. **Investigate data signal and labels.** The current CV ROC-AUC is only slightly above random, and test recall is very low.
+2. **Use a leakage-safe pipeline.** Wrap scaling and the estimator in an sklearn `Pipeline` so preprocessing is applied consistently inside every cross-validation fold.
+3. **Tune for the actual objective.** Evaluate PR-AUC, recall at an acceptable alert volume, calibration, and cost-weighted metrics.
+4. **Tune the decision threshold.** Do not assume `0.5` is appropriate for maintenance triage.
+5. **Add a real validation protocol.** Use a time-based split if records represent a temporal fleet history, and keep a final untouched test set.
+6. **Improve data validation.** Enforce numeric types, required columns, finite values, valid ranges, and target values of only `0` or `1`.
+7. **Track versions.** Record training date, dependency versions, dataset hash, and model version in metadata.
+8. **Add tests and CI.** Test schema validation, artifact loading, prediction shape, probability bounds, and output generation.
+9. **Add explainability carefully.** Feature importance or SHAP analysis should be validated and presented as association, not causal diagnosis.
+10. **Monitor in production.** Track drift, missingness, alert rates, false negatives, and confirmed maintenance outcomes.
+
+## Troubleshooting
+
+### `FileNotFoundError`
+
+Run the command from the repository root and confirm that the four required artifacts plus `verification_dataset.csv` are present:
+
+```bash
+python local_inference.py
 ```
 
-### Problem: "File not found" errors
-- Ensure all 4 .pkl files in same directory
-- Check exact file names
-- Use absolute paths if needed
+### Feature mismatch or `KeyError`
 
-### Problem: Feature mismatch errors
-- Verify verification CSV has exact same features
-- Check feature order matches training
-- No extra/missing columns
+The verification CSV must contain all nine names from `feature_names.pkl`. `Record_ID` and `Failure` are not model features, but `Failure` may be included for evaluation.
 
----
+### Pickle or NumPy/scikit-learn compatibility error
 
-## 📊 Performance Benchmarks
+Install compatible dependency versions in a clean environment or retrain the model with the versions currently installed. Do not load an untrusted pickle file.
 
-### Expected Results (on test set)
-```
-Logistic Regression:
-  Accuracy: ~0.88
-  ROC-AUC: ~0.85
-  F1-Score: ~0.83
+### Too many alerts or too few detected failures
 
-Random Forest:
-  Accuracy: ~0.91
-  ROC-AUC: ~0.90
-  F1-Score: ~0.88
+Review the probability distribution and select a threshold using a labeled validation set. Changing a threshold changes the operational trade-off; it does not improve the underlying model ranking.
 
-Gradient Boosting (Usually Best):
-  Accuracy: ~0.93
-  ROC-AUC: ~0.92
-  F1-Score: ~0.90
-```
+### Verification results differ from training results
 
-### Cross-Validation Stability
-```
-Good:
-  CV ROC-AUC: 0.90 ± 0.02  (low variance)
-  
-Bad:
-  CV ROC-AUC: 0.90 ± 0.10  (high variance → unreliable)
-```
+Check feature names and units, feature distributions, missing-value handling, dependency versions, and whether the verification data is representative. The checked-in verification file is only 25 rows, so its metrics can vary substantially.
 
----
+## License and usage
 
-## 🚀 Advanced Usage
-
-### 1. Retrain with New Data
-```python
-# Add more data to dataset.csv
-# Run training again in Colab
-# Download updated model
-```
-
-### 2. Hyperparameter Tuning
-```python
-# In vehicle_health_colab.py, modify:
-GradientBoostingClassifier(
-    n_estimators=150,      # More trees
-    learning_rate=0.05,    # Slower learning
-    max_depth=5,          # Limit depth
-    subsample=0.8         # Use 80% per tree
-)
-```
-
-### 3. Feature Engineering
-```python
-# Add to verification data:
-X['Temp_Diff'] = X['Engine_Temperature_C'] - X['Coolant_Temperature_C']
-X['Vibration_RPM_Ratio'] = X['Vibration_mm_s'] / X['RPM']
-```
-
-### 4. Ensemble Predictions
-```python
-# Combine multiple models
-pred = (pred_lr + pred_rf + pred_gb) / 3
-risk = "HIGH" if pred > 0.5 else "LOW"
-```
-
-### 5. Production Deployment
-- Flask/FastAPI web service
-- Docker containerization
-- Real-time prediction API
-- Database for historical tracking
-
----
-
-## 📝 Key Formulas
-
-### Stratified K-Fold
-```
-For each fold:
-  - Maintains original class ratio
-  - If dataset has 15% failures
-  - Each fold will have ~15% failures
-  - Better evaluation than random split
-```
-
-### StandardScaler Formula
-```
-scaled_value = (original_value - mean) / standard_deviation
-Result: all features have mean=0, std=1
-```
-
-### ROC-AUC Calculation
-```
-ROC = Receiver Operating Characteristic curve
-AUC = Area Under the Curve
-Range: 0 to 1
-- 0.5 = random guessing
-- 1.0 = perfect classifier
-- > 0.9 = excellent
-- > 0.7 = good
-```
-
-### Model Selection
-```
-Best Model = argmax(CV_ROC_AUC_mean)
-Ensures selection based on unbiased evaluation
-Not on single train-test split
-```
-
----
-
-## 📚 Technical Details
-
-### Data Split Strategy
-```
-Dataset (6000 samples)
-    ├─ Training (4800 samples, 80%)
-    │  └─ 5-fold CV: Each fold trains on 3840, validates on 960
-    └─ Test (1200 samples, 20%)
-       └─ Final evaluation on completely unseen data
-```
-
-### Pipeline Flow
-```
-Raw Data
-   ↓
-Exploration & Validation
-   ↓
-Train-Test Split (80-20, stratified)
-   ↓
-Feature Scaling (StandardScaler)
-   ↓
-5-Fold Cross-Validation
-   ├─ Fold 1: Train/Val → CV Score
-   ├─ Fold 2: Train/Val → CV Score
-   ├─ Fold 3: Train/Val → CV Score
-   ├─ Fold 4: Train/Val → CV Score
-   └─ Fold 5: Train/Val → CV Score
-   ↓
-Mean CV Score & Std Dev
-   ↓
-Retrain on Full Training Set
-   ↓
-Test Set Evaluation
-   ↓
-Best Model Selection
-   ↓
-Save Model + Scaler + Metadata
-```
-
----
-
-## ✅ Verification Checklist
-
-- [ ] Training completed successfully in Colab
-- [ ] All 4 pickle files downloaded
-- [ ] local_inference.py available locally
-- [ ] verification_dataset.csv prepared with 9 features
-- [ ] Python environment has required libraries
-- [ ] local_inference.py runs without errors
-- [ ] Predictions generated and saved
-- [ ] High-risk vehicles identified
-- [ ] Comparison with training performance checked
-- [ ] Results reviewed and action taken on high-risk vehicles
-
----
-
-## 📞 Support & Questions
-
-### Common Issues
-1. **Features don't match**: Ensure exact column names and order
-2. **Scaling issues**: Use the saved scaler, don't fit new one
-3. **Performance drops**: Check data distribution differences
-4. **Slow inference**: Normal for RandomForest/GradientBoosting, not a problem
-
-### Best Practices
-- Document any changes to features
-- Track model versions (v1.0, v1.1, etc.)
-- Monitor performance over time
-- Retrain quarterly or when performance drops >5%
-- Keep historical predictions for analysis
-
----
-
-## 📄 License & Usage
-This system is designed for predictive vehicle maintenance. Use with domain expertise and proper validation before deployment in critical applications.
-
----
-
-## 🎓 Learning Outcomes
-
-After completing this project, you'll understand:
-- ✅ Complete ML pipeline from data to production
-- ✅ Cross-validation and its importance
-- ✅ Feature scaling and normalization
-- ✅ Model selection and comparison
-- ✅ Handling imbalanced datasets
-- ✅ Evaluation metrics and their interpretation
-- ✅ Model deployment and verification
-- ✅ Building reliable AI systems
-
----
-
-**Last Updated**: 2026  
-**Dataset**: 6000 vehicle health records  
-**Models**: Logistic Regression, Random Forest, Gradient Boosting  
-**Framework**: scikit-learn  
-**Runtime**: ~5-10 min training, <1 sec inference
+No explicit open-source license is included in this repository. Treat the code and artifacts as project-owned unless the repository owner provides separate licensing terms. Do not use the predictions as the sole basis for safety-critical or legally consequential maintenance decisions.
